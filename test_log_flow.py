@@ -91,17 +91,33 @@ class LoggerTest(unittest.TestCase):
         path = os.ttyname(slave)
         requests, failures = [], []
 
+        def receive_request():
+            request = b""
+            while len(request) < 8:
+                if not select.select([master], [], [], 5)[0]:
+                    raise TimeoutError("Logger did not send request")
+                request += os.read(master, 8 - len(request))
+            requests.append(request)
+            return request
+
         def meter():
             try:
                 for reply in replies:
-                    request = b""
-                    while len(request) < 8:
-                        if not select.select([master], [], [], 5)[0]:
-                            raise TimeoutError("Logger did not send request")
-                        request += os.read(master, 8 - len(request))
-                    requests.append(request)
+                    totals_reply = self.totals_reply()
+                    if isinstance(reply, tuple):
+                        reply, totals_reply = reply
+                    request = receive_request()
+                    if request[:6] != bytes.fromhex("01 03 00 00 00 02"):
+                        raise AssertionError(f"Unexpected rate request: {request.hex()}")
                     if reply is not None:
                         os.write(master, reply)
+                    if (reply is not None and len(reply) == 9 and reply[:3] == b"\x01\x03\x04"
+                            and crc16(reply[:-2]) == reply[-2:]):
+                        request = receive_request()
+                        if request[:6] != bytes.fromhex("01 03 00 70 00 06"):
+                            raise AssertionError(f"Unexpected totals request: {request.hex()}")
+                        if totals_reply is not None:
+                            os.write(master, totals_reply)
             except Exception as exc:
                 failures.append(exc)
 
@@ -125,8 +141,9 @@ class LoggerTest(unittest.TestCase):
                     rows = list(csv.DictReader(source, delimiter=delimiter))
                 self.assertEqual(len(rows), count)
                 for request in requests:
-                    # Address 1, read holding registers, offset 0, count 2.
-                    self.assertEqual(request, bytes.fromhex("01 03 00 00 00 02 c4 0b"))
+                    self.assertIn(request[:6], (bytes.fromhex("01 03 00 00 00 02"),
+                                                bytes.fromhex("01 03 00 70 00 06")))
+                    self.assertEqual(request[-2:], crc16(request[:-2]))
                 self.assertRegex(rows[0]["date"], r"^\d{4}-\d{2}-\d{2}$")
                 self.assertRegex(rows[0]["utc_offset"], r"^[+-]\d{4}$")
                 return result, rows[0]
@@ -140,6 +157,32 @@ class LoggerTest(unittest.TestCase):
         payload = b"\x01\x03\x04" + struct.pack(">HH", low, high)
         return payload + crc16(payload)
 
+    @staticmethod
+    def totals_reply(net=80.25, positive=100.5, negative=20.25):
+        data = bytearray()
+        for value in (net, positive, negative):
+            high, low = struct.unpack(">HH", struct.pack(">f", value))
+            data.extend(struct.pack(">HH", low, high))
+        payload = b"\x01\x03\x0c" + data
+        return payload + crc16(payload)
+
+    def test_meter_totals_and_signed_net_are_written(self):
+        result, row = self.run_meter([(self.reply(-3.5), self.totals_reply(-20.25, 10.5, 30.75))])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(float(row["positive_total_m3"]), 10.5)
+        self.assertEqual(float(row["negative_total_m3"]), 30.75)
+        self.assertEqual(float(row["net_total_m3"]), -20.25)
+
+    def test_totalizer_failure_does_not_log_partial_sample_as_ok(self):
+        payload = bytes.fromhex("01 83 02")
+        reply = payload + crc16(payload)
+        result, row = self.run_meter([(self.reply(7.25), reply)], ["--retries", "0"])
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(row["status"], "error")
+        for field in ("flow_rate_m3_h", "positive_total_m3", "negative_total_m3", "net_total_m3"):
+            self.assertEqual(row[field], "")
+        self.assertIn("Totalizer read", row["error"])
+
     def test_positive_negative_and_zero_flow(self):
         for value in (12.5, -2.75, 0.0):
             with self.subTest(value=value):
@@ -148,6 +191,9 @@ class LoggerTest(unittest.TestCase):
                 self.assertEqual(row["status"], "ok")
                 self.assertEqual(float(row["flow_rate_m3_h"]), value)
                 self.assertEqual(row["error"], "")
+                self.assertEqual(float(row["positive_total_m3"]), 100.5)
+                self.assertEqual(float(row["negative_total_m3"]), 20.25)
+                self.assertEqual(float(row["net_total_m3"]), 80.25)
 
     def test_crc_failure_then_recovery(self):
         result, row = self.run_meter([b"\x01\x03\x04\x00\x00\x00\x00\x00\x00",

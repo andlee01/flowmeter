@@ -34,8 +34,9 @@ sampling until it is installed, while `--help` and `--list-ports` still work.
 
 `log_flow.py` uses PyModbus for Modbus RTU framing, CRC validation, response
 handling and float conversion, with pySerial providing serial access. It reads
-instantaneous flow rate in m3/h immediately, then every 300 seconds. These are
-point samples, not five-minute average flow or accumulated volume.
+instantaneous flow rate in m3/h and accumulated positive, negative and net volume
+in m3 immediately, then every 300 seconds. The rate is a point sample, not an
+average over the interval. Accumulated volumes are read directly from the meter.
 
 Before running, remove the loopback wires and connect the meter's RS485 pair
 to the SH-U11 A+/B- terminals according to the meter wiring diagram. Close
@@ -130,7 +131,8 @@ for example `flow_2026-10-24_14-30-00_123456+0100.csv`. Override the directory
 with `--output-dir ~/Downloads` if preferred. Files contain a header,
 comma separators, Windows line endings and a UTF-8 BOM for Excel. Each row has
 local date, local time, UTC offset, numeric flow rate, status, error, and the
-two raw register values. Separate date/time columns allow Excel to interpret
+two raw flow-rate register values, followed by `positive_total_m3`,
+`negative_total_m3`, and `net_total_m3`. Separate date/time columns allow Excel to interpret
 them as dates and times; the offset distinguishes repeated times when clocks
 change. Import through Excel's Data > From Text/CSV if necessary.
 
@@ -142,6 +144,25 @@ than read in a burst. The computer must remain awake and the process running.
 
 The register mapping comes from the companion TUF-2000 communication document:
 function 03, zero-based address 0, two registers, IEEE754 flow rate in m3/h.
+A second function-03 request reads zero-based address 112, count 6:
+
+| Manual registers | CSV field | Unit |
+| --- | --- | --- |
+| 0113-0114 | `net_total_m3` | cubic metres |
+| 0115-0116 | `positive_total_m3` | cubic metres |
+| 0117-0118 | `negative_total_m3` | cubic metres |
+
+These are FLOAT32 registers with the same configurable word order as the rate.
+They are distinct from the integer/fraction accumulators in registers 0009-0028
+that depend on totalizer unit and multiplier settings. The floating-point
+registers above are documented as cubic metres, independently of display units.
+Totals are the meter's accumulated values, not totals since the script started;
+resets or disabled totalizers on the meter can affect them. Net is read from the
+meter rather than recomputed as positive minus negative. FLOAT32 totals lose
+fine precision at large accumulated volumes. Rate and totals are separate reads
+and are not guaranteed to represent an atomic snapshot. If either request fails,
+the entire sample is retried; after the configured retries, all measurement
+columns are blank and status is `error`. A failure is never recorded as zero.
 The TSONIC TUF-2000 series user manual covers operation; the register table
 is in the separate communication reference linked below. Compatibility with ZT-LU-2001BBJ has not been confirmed on the hardware.
 Low-word-first decoding is the initial assumption; compare a one-shot reading

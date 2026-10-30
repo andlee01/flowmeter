@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Read TUF-2000 flow rate over Modbus RTU and log it to an Excel-friendly CSV.
 
-Uses PyModbus with pySerial. Only reads holding registers, address 0,
-count 2: documented registers 0001-0002, IEEE754 flow rate in m3/h.
+Uses PyModbus with pySerial. Reads holding registers 0001-0002 for flow
+rate (m3/h) and 0113-0118 for net, positive and negative totals (m3).
 """
 
 import argparse
@@ -78,7 +78,19 @@ def read_flow(args):
             registers, data_type=client.DATATYPE.FLOAT32, word_order=args.word_order)
         if not math.isfinite(value):
             raise ValueError(f"Invalid flow value from registers {registers}")
-        return value, tuple(registers)
+        totals_response = client.read_holding_registers(address=112, count=6, device_id=args.slave_id)
+        if totals_response.isError():
+            raise ValueError(f"Totalizer read returned Modbus exception code {totals_response.exception_code}")
+        total_registers = totals_response.registers
+        if len(total_registers) != 6:
+            raise ValueError(f"Expected 6 totalizer registers, received {len(total_registers)}")
+        # Manual order is NET, POS, NEG, each a float in cubic metres.
+        totals = tuple(client.convert_from_registers(
+            total_registers[offset:offset + 2], data_type=client.DATATYPE.FLOAT32,
+            word_order=args.word_order) for offset in (0, 2, 4))
+        if not all(math.isfinite(total) for total in totals):
+            raise ValueError(f"Invalid totalizer values from registers {total_registers}")
+        return value, tuple(registers), totals
     except ModbusException as exc:
         raise OSError(f"Modbus communication failed: {exc}") from exc
     finally:
@@ -167,7 +179,8 @@ def main():
     with path.open("x", encoding="utf-8-sig", newline="") as output:
         writer = csv.writer(output, delimiter={"comma": ",", "semicolon": ";", "tab": "\t"}[args.delimiter])
         writer.writerow(["date", "time", "utc_offset", "flow_rate_m3_h", "status",
-                         "error", "register_0001", "register_0002"])
+                         "error", "register_0001", "register_0002",
+                         "positive_total_m3", "negative_total_m3", "net_total_m3"])
         output.flush()
         os.fsync(output.fileno())
         report(f"CSV: {path}")
@@ -177,10 +190,10 @@ def main():
         samples, had_error = 0, False
         while not stopping.is_set():
             stamp = timestamp()
-            value, registers, error = None, ("", ""), ""
+            value, registers, totals, error = None, ("", ""), None, ""
             for attempt in range(args.retries + 1):
                 try:
-                    value, registers = read_flow(args)
+                    value, registers, totals = read_flow(args)
                     error = ""
                     break
                 except (OSError, serial.SerialException, ValueError) as exc:
@@ -189,15 +202,16 @@ def main():
                         break
             status = "error" if error else "ok"
             text_value = "" if value is None else format(value, ".9g")
+            net, pos, neg = ("", "", "") if totals is None else tuple(format(total, ".9g") for total in totals)
             writer.writerow([stamp.strftime("%Y-%m-%d"), stamp.strftime("%H:%M:%S"),
-                             stamp.strftime("%z"), text_value, status, error, *registers])
+                             stamp.strftime("%z"), text_value, status, error, *registers, pos, neg, net])
             output.flush()
             os.fsync(output.fileno())
             message = f"{stamp.isoformat(timespec='seconds')}  "
             if error:
                 print(message + "ERROR: " + error, file=sys.stderr, flush=True)
             else:
-                report(message + text_value + " m3/h")
+                report(message + text_value + f" m3/h; positive={pos}, negative={neg}, net={net} m3")
             samples += 1
             had_error = had_error or bool(error)
             if args.once or (args.count and samples >= args.count):
