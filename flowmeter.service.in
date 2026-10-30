@@ -1,0 +1,16 @@
+[Unit]
+Description=Flow meter CSV logger
+After=local-fs.target systemd-udev-trigger.service
+
+[Service]
+Type=simple
+User=@USER@
+SupplementaryGroups=dialout gpio
+WorkingDirectory=@PROJECT@
+ExecStart=@PROJECT@/.venv/bin/python -u @PROJECT@/log_flow.py --interval 10s --led auto
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

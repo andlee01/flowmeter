@@ -1,0 +1,2 @@
+# Grant gpio group access only to the Raspberry Pi ACT LED control attributes.
+ACTION=="add", SUBSYSTEM=="leds", KERNEL=="ACT|led0", RUN+="/bin/chgrp gpio /sys%p/trigger /sys%p/brightness", RUN+="/bin/chmod g+w /sys%p/trigger /sys%p/brightness"

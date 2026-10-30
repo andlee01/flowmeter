@@ -20,6 +20,8 @@ import time
 import serial
 from serial.tools import list_ports
 
+from activity_led import ActivityLed
+
 try:
     from pymodbus.client import ModbusSerialClient
     from pymodbus.exceptions import ModbusException
@@ -136,6 +138,8 @@ def main():
     parser.add_argument("--retry-delay", type=duration, default=0.5, help="pause between attempts, e.g. 0.5s")
     parser.add_argument("--count", type=nonnegative_int, default=0, help="stop after this many samples, including errors; 0 runs continuously")
     parser.add_argument("--delimiter", choices=["comma", "semicolon", "tab"], default="comma", help="CSV column separator for your Excel locale")
+    parser.add_argument("--led", choices=["off", "auto", "ACT", "led0"], default="off",
+                        help="blink onboard ACT LED after successful saved readings; requires LED permissions")
     parser.add_argument("--utc", action="store_true", help="use UTC for row and filename timestamps")
     parser.add_argument("--quiet", action="store_true", help="suppress routine console output; still report read errors")
     parser.add_argument("--output-dir", type=Path, default=Path(__file__).resolve().parent / "readings")
@@ -176,7 +180,7 @@ def main():
     started = timestamp()
     path = args.output_dir / f"flow_{started:%Y-%m-%d_%H-%M-%S_%f%z}.csv"
     # Exclusive create prevents accidental overwrites; BOM helps Excel detect UTF-8.
-    with path.open("x", encoding="utf-8-sig", newline="") as output:
+    with ActivityLed(args.led) as led, path.open("x", encoding="utf-8-sig", newline="") as output:
         writer = csv.writer(output, delimiter={"comma": ",", "semicolon": ";", "tab": "\t"}[args.delimiter])
         writer.writerow(["date", "time", "utc_offset", "flow_rate_m3_h", "status",
                          "error", "register_0001", "register_0002",
@@ -198,6 +202,7 @@ def main():
                     break
                 except (OSError, serial.SerialException, ValueError) as exc:
                     error = str(exc)
+                    led.set_recording(False)
                     if attempt < args.retries and stopping.wait(args.retry_delay):
                         break
             status = "error" if error else "ok"
@@ -207,6 +212,7 @@ def main():
                              stamp.strftime("%z"), text_value, status, error, *registers, pos, neg, net])
             output.flush()
             os.fsync(output.fileno())
+            led.set_recording(not error)
             message = f"{stamp.isoformat(timespec='seconds')}  "
             if error:
                 print(message + "ERROR: " + error, file=sys.stderr, flush=True)

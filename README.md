@@ -26,7 +26,7 @@ The requirements pin PyModbus to 3.11.3 to match the client API used here.
 Run commands below from the cloned `flowmeter` directory. To run the tests:
 
 ```bash
-.venv/bin/python -m unittest -v test_log_flow.py
+.venv/bin/python -m unittest discover -v
 ```
 
 Without PyModbus, transport tests are explicitly skipped. The logger refuses
@@ -91,6 +91,7 @@ fractions such as `0.5s` and `1.5m`. Bare numbers still mean seconds.
 | `--retry-delay 0.5s` | Pause between attempts | 0.5 seconds |
 | `--output-dir PATH` | Directory for new timestamped CSV files | `flowmeter/readings` |
 | `--delimiter semicolon` | `comma`, `semicolon` or `tab`, for Excel import | comma |
+| `--led auto` | Blink the onboard ACT LED while readings are saved successfully; off/auto/ACT/led0 | off |
 | `--utc` | UTC row and filename timestamps rather than local time | Off |
 | `--quiet` | Suppress routine output; read errors still go to stderr | Off |
 | `--word-order little` | Register word order: little or big | little |
@@ -101,6 +102,85 @@ them to the meter. The interval is time between samples, not samples per second.
 Sampling faster than the meter updates may repeat the same value. Failed reads
 can take longer than the chosen interval; missed slots are skipped. With a
 finite count, exit status is 1 if any recorded sample failed, otherwise 0.
+
+### Recording indicator on Raspberry Pi 2 and 3
+
+Use `--led auto` to take over the green ACT LED. No additional Python package
+or GPIO wiring is required. The script detects `/sys/class/leds/ACT` (newer OS)
+or `/sys/class/leds/led0` (older OS). You can explicitly choose `--led ACT` or
+`--led led0`. The red power LED is left alone. LED control is opt-in; the default
+`--led off` preserves ordinary SD-card activity indication.
+
+- Before the first successful saved reading: off.
+- After a successful reading is written, flushed and synced: a short flash
+  about once a second, including between scheduled samples.
+- On any read failure: off, including during retries; blinking resumes after
+  the next successful saved sample.
+- On normal shutdown, Ctrl+C, SIGTERM or a file-writing error: restore the
+  previous brightness and kernel trigger (normally SD-card activity).
+
+Blinking means the latest sample succeeded and the logger is running; it does
+not independently validate the meter's sensor state. The original SD activity
+pattern returns when the logger stops, so occasional disk flashes afterwards
+are normal. Very short `--once` runs may exit before a blink is visible. A forced
+SIGKILL or power cut cannot run cleanup; software blinking stops but the LED may
+remain in its last state until reconfigured/rebooted. If LED access fails during
+startup, the requested LED-enabled run fails with a permissions message. A later
+LED hardware/write error warns on stderr while CSV logging continues.
+
+On Raspberry Pi OS, install this permission rule once on the logging Pi:
+
+```bash
+cd ~/flowmeter
+sudo install -m 0644 99-flowmeter-led.rules /etc/udev/rules.d/99-flowmeter-led.rules
+sudo usermod -aG gpio "$USER"
+sudo udevadm control --reload-rules
+sudo udevadm trigger --subsystem-match=leds --action=add
+```
+
+Log out and back in for the new group membership, then run:
+
+```bash
+cd ~/flowmeter
+.venv/bin/python log_flow.py --interval 10s --led auto
+```
+
+The rule reapplies access at boot and grants the gpio group access only to the
+ACT LED's `trigger` and `brightness` controls. It requires the standard Raspberry
+Pi OS gpio group. Other distributions may need their own group configuration.
+Pi 2/3 require an OS with Python 3.10 or newer for this project's PyModbus version;
+32-bit Raspberry Pi OS is supported by the Python code. LED names and permissions
+must be checked on the actual OS image.
+
+### Start automatically at boot, with the recording LED
+
+The included service template runs the logger as your normal user, with serial
+and LED group access. From the cloned project directory, install the LED rule
+above, stop any manually running logger, and create the service:
+
+```bash
+cd ~/flowmeter
+sed "s|@USER@|$(id -un)|g; s|@PROJECT@|$PWD|g" flowmeter.service.in | sudo tee /etc/systemd/system/flowmeter.service > /dev/null
+sudo systemctl daemon-reload
+sudo systemctl enable --now flowmeter.service
+systemctl status flowmeter.service
+```
+
+This replaces an existing `flowmeter.service` file with the supplied template.
+If it was already running, apply changes with `sudo systemctl restart flowmeter`.
+The template samples every 10 seconds; edit `ExecStart` to change the interval.
+Do not run a manual instance alongside the service. To view logs or stop it:
+
+```bash
+journalctl -u flowmeter.service -n 20 --no-pager
+sudo systemctl stop flowmeter
+```
+
+No desktop or login is required for this system service. If using Raspberry Pi
+Connect without automatic login, run `loginctl enable-linger` before rebooting
+to keep Connect's remote shell available. To boot without the desktop, use
+`sudo raspi-config` and select console boot under the boot/login settings.
+A new timestamped CSV is created on each service start.
 
 ### Moving the adapter to another USB socket
 
@@ -226,6 +306,7 @@ not test the USB adapter, driver, wiring, or device permissions.
 
 ## Sources
 
+- Linux LED interface: https://kernel.org/doc/html/latest/leds/leds-class.html
 - SH-U11 manufacturer: https://www.deshide.com/product-details_SH-U11.html
 - pySerial usage: https://pyserial.readthedocs.io/en/latest/shortintro.html
 - Simulated loopback: https://pyserial.readthedocs.io/en/latest/url_handlers.html#loop
