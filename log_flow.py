@@ -140,6 +140,8 @@ def main():
     parser.add_argument("--delimiter", choices=["comma", "semicolon", "tab"], default="comma", help="CSV column separator for your Excel locale")
     parser.add_argument("--led", choices=["off", "auto", "ACT", "led0"], default="off",
                         help="blink onboard ACT LED after successful saved readings; requires LED permissions")
+    parser.add_argument("--led-stop", choices=["off", "restore"], default="off",
+                        help="leave the ACT LED off on exit, or restore its previous kernel trigger")
     parser.add_argument("--utc", action="store_true", help="use UTC for row and filename timestamps")
     parser.add_argument("--quiet", action="store_true", help="suppress routine console output; still report read errors")
     parser.add_argument("--output-dir", type=Path, default=Path(__file__).resolve().parent / "readings")
@@ -180,7 +182,7 @@ def main():
     started = timestamp()
     path = args.output_dir / f"flow_{started:%Y-%m-%d_%H-%M-%S_%f%z}.csv"
     # Exclusive create prevents accidental overwrites; BOM helps Excel detect UTF-8.
-    with ActivityLed(args.led) as led, path.open("x", encoding="utf-8-sig", newline="") as output:
+    with ActivityLed(args.led, stop_mode=args.led_stop) as led, path.open("x", encoding="utf-8-sig", newline="") as output:
         writer = csv.writer(output, delimiter={"comma": ",", "semicolon": ";", "tab": "\t"}[args.delimiter])
         writer.writerow(["date", "time", "utc_offset", "flow_rate_m3_h", "status",
                          "error", "register_0001", "register_0002",

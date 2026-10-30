@@ -7,9 +7,10 @@ import threading
 
 
 class ActivityLed:
-    """Blink after a successful saved sample; restore the kernel trigger on exit."""
+    """Blink after a successful saved sample; leave the LED dark on exit by default."""
 
-    def __init__(self, selection="off", root=Path("/sys/class/leds")):
+    def __init__(self, selection="off", root=Path("/sys/class/leds"), stop_mode="off"):
+        self.stop_mode = stop_mode
         self.path = None
         if selection != "off":
             names = ("ACT", "led0") if selection == "auto" else (selection,)
@@ -87,4 +88,11 @@ class ActivityLed:
         self._stop.set()
         if self._thread is not None:
             self._thread.join()
-        self._restore()
+        if self.stop_mode == "restore":
+            self._restore()
+        elif self.path is not None and self._original_trigger is not None:
+            try:
+                self._write("trigger", "none")
+                self._write("brightness", 0)
+            except OSError as exc:
+                print(f"WARNING: could not turn off ACT LED: {exc}", file=sys.stderr, flush=True)

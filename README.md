@@ -92,6 +92,7 @@ fractions such as `0.5s` and `1.5m`. Bare numbers still mean seconds.
 | `--output-dir PATH` | Directory for new timestamped CSV files | `flowmeter/readings` |
 | `--delimiter semicolon` | `comma`, `semicolon` or `tab`, for Excel import | comma |
 | `--led auto` | Blink the onboard ACT LED while readings are saved successfully; off/auto/ACT/led0 | off |
+| `--led-stop restore` | Restore the previous SD activity trigger on exit instead of leaving the LED off | off |
 | `--utc` | UTC row and filename timestamps rather than local time | Off |
 | `--quiet` | Suppress routine output; read errors still go to stderr | Off |
 | `--word-order little` | Register word order: little or big | little |
@@ -116,13 +117,13 @@ or `/sys/class/leds/led0` (older OS). You can explicitly choose `--led ACT` or
   about once a second, including between scheduled samples.
 - On any read failure: off, including during retries; blinking resumes after
   the next successful saved sample.
-- On normal shutdown, Ctrl+C, SIGTERM or a file-writing error: restore the
-  previous brightness and kernel trigger (normally SD-card activity).
+- On normal shutdown, Ctrl+C, SIGTERM or a file-writing error: turn the LED off
+  and leave its SD-card activity trigger disabled, so it stays dark.
 
 Blinking means the latest sample succeeded and the logger is running; it does
-not independently validate the meter's sensor state. The original SD activity
-pattern returns when the logger stops, so occasional disk flashes afterwards
-are normal. Very short `--once` runs may exit before a blink is visible. A forced
+not independently validate the meter's sensor state. By default SD-card activity no longer flashes this LED after logging stops.
+Use `--led-stop restore` to request the original SD activity behaviour instead.
+A failed startup restores the original state when possible. Very short `--once` runs may exit before a blink is visible. A forced
 SIGKILL or power cut cannot run cleanup; software blinking stops but the LED may
 remain in its last state until reconfigured/rebooted. If LED access fails during
 startup, the requested LED-enabled run fails with a permissions message. A later

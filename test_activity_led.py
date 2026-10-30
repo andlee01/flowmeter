@@ -2,6 +2,11 @@
 
 from pathlib import Path
 import tempfile
+import os
+import signal
+import subprocess
+import sys
+import time
 import threading
 import unittest
 from unittest.mock import patch
@@ -30,9 +35,9 @@ class ActivityLedTest(unittest.TestCase):
                 led = self.led_files(directory, name)
                 with ActivityLed("auto", root=directory) as indicator:
                     self.assertEqual(indicator.path, led)
-                self.assertEqual((led / "trigger").read_text().strip(), "mmc0")
+                self.assertEqual((led / "trigger").read_text().strip(), "none")
 
-    def test_blinks_only_when_recording_and_restores_trigger(self):
+    def test_blinks_only_when_recording_and_stays_off_on_exit(self):
         with tempfile.TemporaryDirectory() as directory:
             led = self.led_files(directory)
             illuminated = threading.Event()
@@ -54,10 +59,10 @@ class ActivityLedTest(unittest.TestCase):
                     indicator.set_recording(False)
                     self.assertEqual((led / "brightness").read_text().strip(), "0")
                 self.assertFalse(indicator._thread.is_alive())
-                self.assertEqual((led / "trigger").read_text().strip(), "mmc0")
+                self.assertEqual((led / "trigger").read_text().strip(), "none")
                 self.assertEqual((led / "brightness").read_text().strip(), "0")
 
-    def test_exception_restores_led(self):
+    def test_exception_turns_led_off(self):
         with tempfile.TemporaryDirectory() as directory:
             led = self.led_files(directory)
             with self.assertRaisesRegex(OSError, "disk full"):
@@ -65,7 +70,49 @@ class ActivityLedTest(unittest.TestCase):
                     indicator.set_recording(True)
                     raise OSError("disk full")
             self.assertFalse(indicator._thread.is_alive())
+            self.assertEqual((led / "trigger").read_text().strip(), "none")
+
+    def test_restore_mode_returns_original_trigger(self):
+        with tempfile.TemporaryDirectory() as directory:
+            led = self.led_files(directory)
+            with ActivityLed("auto", root=directory, stop_mode="restore"):
+                pass
             self.assertEqual((led / "trigger").read_text().strip(), "mmc0")
+
+    def test_ctrl_c_stops_logger_and_leaves_indicator_dark(self):
+        # Real logger lifecycle and signal handling, with simulated readings and LED files.
+        with tempfile.TemporaryDirectory() as directory:
+            led = self.led_files(directory)
+            script = """
+import sys
+from pathlib import Path
+import log_flow
+from activity_led import ActivityLed
+root = Path(sys.argv[1])
+log_flow.ActivityLed = lambda selection, **kwargs: ActivityLed(selection, root=root, **kwargs)
+log_flow.read_flow = lambda args: (1.25, (0, 0), (80.25, 100.5, 20.25))
+sys.argv = ['log_flow.py', '--led', 'auto', '--interval', '5m', '--output-dir', str(root / 'readings')]
+sys.exit(log_flow.main())
+"""
+            process = subprocess.Popen([sys.executable, "-c", script, directory],
+                                       cwd=Path(__file__).parent, stdout=subprocess.PIPE,
+                                       stderr=subprocess.PIPE, text=True)
+            try:
+                deadline = time.monotonic() + 5
+                while (led / "brightness").read_text().strip() != "1":
+                    self.assertIsNone(process.poll(), "Logger exited before first LED flash")
+                    self.assertLess(time.monotonic(), deadline, "No LED flash after saved reading")
+                    time.sleep(0.01)
+                os.kill(process.pid, signal.SIGINT)
+                stdout, stderr = process.communicate(timeout=5)
+                self.assertEqual(process.returncode, 0, stdout + stderr)
+                self.assertEqual((led / "trigger").read_text().strip(), "none")
+                self.assertEqual((led / "brightness").read_text().strip(), "0")
+                self.assertEqual(len(list((Path(directory) / 'readings').glob('*.csv'))), 1)
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.communicate()
 
     def test_missing_led_reports_configuration_problem(self):
         with tempfile.TemporaryDirectory() as directory:
