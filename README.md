@@ -183,6 +183,54 @@ to keep Connect's remote shell available. To boot without the desktop, use
 `sudo raspi-config` and select console boot under the boot/login settings.
 A new timestamped CSV is created on each service start.
 
+### DS3231 battery-backed clock for offline logging
+
+`setup_rtc.py` configures the Pi Hut DS3231 on Raspberry Pi OS Bookworm/Trixie.
+It uses Python's standard library, so run it with system `python3` rather than
+installing Python packages as root. Keep the Pi online for initial setup.
+
+First, optionally review the changes, then configure the boot overlay:
+
+```bash
+cd ~/flowmeter
+python3 setup_rtc.py --dry-run
+sudo python3 setup_rtc.py
+```
+
+The script installs `util-linux-extra` if `hwclock` is missing, backs up the boot
+configuration before changing it, and adds I2C and the DS3231 overlay in an
+`[all]` block. It preserves other settings and is safe to rerun. It refuses an
+existing conflicting or conditional RTC overlay rather than silently replacing
+another device. It does not reboot automatically or change the system/RTC time
+in this configuration step.
+
+When ready, reboot and initialise the RTC from the correct system clock:
+
+```bash
+sudo reboot
+# Reconnect after the Pi reboots, then:
+cd ~/flowmeter
+sudo python3 setup_rtc.py --init
+sudo python3 setup_rtc.py --status
+```
+
+`--init` verifies that a DS3231 is registered as rtc0 and that the system clock
+is NTP-synchronised, then copies system time into the hardware clock in UTC.
+If NTP has not synchronised yet, retry after `timedatectl status` shows that it
+has. The script keeps internet time synchronisation enabled and leaves your
+local time zone unchanged. Only if you manually set and verified the correct
+system time without NTP, explicitly allow it using `--init --trust-system-time`.
+
+On subsequent boots the kernel should set system time from the RTC. Check
+`cat /sys/class/rtc/rtc0/hctosys` after reboot; `1` means it succeeded. Verify
+battery retention by shutting down properly, briefly removing power and then
+booting without internet time sync. Check `date` or the CSV timestamps before
+relying on it for unattended offline recording. The logger already timestamps
+using system time, so it needs no separate Python RTC library.
+
+Sources: [Pi Hut DS3231 setup](https://thepihut.com/blogs/raspberry-pi-tutorials/17209332-adding-a-real-time-clock-to-your-raspberry-pi),
+[Adafruit RTC setup](https://learn.adafruit.com/adding-a-real-time-clock-to-raspberry-pi/set-rtc-time-2).
+
 ### Moving the adapter to another USB socket
 
 The logger now defaults to `--port auto`. It searches for FT232 adapters with
