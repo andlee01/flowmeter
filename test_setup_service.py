@@ -19,7 +19,7 @@ class ServiceSetupTest(unittest.TestCase):
                 interval(value)
 
     def test_service_uses_project_environment_and_normal_user(self):
-        args = parser().parse_args(["--interval", "5m", "--serial-number", "ABC123", "--require-rtc"])
+        args = parser().parse_args(["--interval", "5m", "--serial-number", "ABC123", "--wait-for-rtc"])
         unit = render_service(args, "pi", Path("/home/pi/flowmeter"))
         self.assertIn('User=pi', unit)
         self.assertIn('ExecStart=:"/home/pi/flowmeter/.venv/bin/python"', unit)
@@ -71,7 +71,7 @@ class ServiceSetupTest(unittest.TestCase):
                 (project / ".venv/bin/python").touch()
                 (project / "99-flowmeter-led.rules").write_text("LED rule")
                 (project / "99-flowmeter-rtc.rules").write_text("RTC rule")
-                args = ["setup_service.py", "--user", "test-user", "--require-rtc"]
+                args = ["setup_service.py", "--user", "test-user", "--wait-for-rtc"]
                 if no_start:
                     args.append("--no-start")
                 with patch("sys.argv", args), patch("setup_service.PROJECT", project), \

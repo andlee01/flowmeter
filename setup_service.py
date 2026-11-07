@@ -49,7 +49,7 @@ def render_service(args, user, project):
         command += ["--output-dir", str(args.output_dir.resolve())]
     groups = "dialout" + (" gpio" if args.led != "off" else "")
     rtc = ""
-    if args.require_rtc:
+    if args.wait_for_rtc:
         check = [str(project / ".venv/bin/python"), "-u", str(project / "wait_for_rtc.py")]
         # '-' means a failed check must never prevent the logger from starting.
         rtc = "ExecStartPre=-:" + " ".join(quote(arg) for arg in check) + "\nTimeoutStartSec=130\n"
@@ -123,8 +123,9 @@ def parser():
     result.add_argument("--word-order", choices=["little", "big"], default="little")
     result.add_argument("--led", choices=["auto", "off", "ACT", "led0"], default="auto")
     result.add_argument("--output-dir", type=Path, help="CSV directory; default is project/readings")
-    result.add_argument("--wait-for-rtc", "--require-rtc", dest="require_rtc", action="store_true",
-                        help="wait for rtc0 until 2 minutes after boot, then start anyway; --require-rtc is a compatibility alias")
+    result.add_argument("--wait-for-rtc", action="store_true",
+                        help="wait for rtc0 until 2 minutes after boot, then start anyway")
+    result.add_argument("--require-rtc", dest="wait_for_rtc", action="store_true", help=argparse.SUPPRESS)
     result.add_argument("--no-start", action="store_true", help="enable for boot without starting/restarting now")
     result.add_argument("--dry-run", action="store_true", help="show service configuration without installing or starting anything")
     return result

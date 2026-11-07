@@ -173,7 +173,7 @@ No logout is needed for the service's explicit group access. Normal manual runs
 still need the user group membership described above. The installer refuses to
 start a duplicate if a manual logger from this project is already running.
 
-If you have configured the DS3231, add `--wait-for-rtc` (`--require-rtc` remains an alias):
+If you have configured the DS3231, add `--wait-for-rtc`:
 
 ```bash
 sudo python3 setup_service.py --interval 10s --wait-for-rtc
@@ -187,8 +187,8 @@ uses boot uptime, so RTC/NTP wall-clock corrections do not change the deadline.
 
 There is no mandatory RTC device dependency: an absent RTC or failed startup
 check must not block the logger. The helper's exit status is ignored by systemd
-as an additional fallback. The old `--require-rtc` option now has exactly these
-same bounded-wait semantics; it no longer makes an RTC a hard requirement.
+as an additional fallback. `--wait-for-rtc` never makes the RTC a hard requirement.
+The old name `--require-rtc` is accepted as a hidden compatibility alias.
 No network-online dependency is added, so logging can work offline using the RTC.
 If neither RTC nor internet time is available, timestamps may be inaccurate;
 the warning appears in `journalctl -u flowmeter`. Verify RTC initialisation before
