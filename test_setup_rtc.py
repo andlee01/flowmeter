@@ -57,6 +57,25 @@ class RtcSetupTest(unittest.TestCase):
                 secondary.rename(root / "rtc0")
                 self.assertEqual(ds3231_device(), Path("/dev/rtc0"))
 
+    def test_shared_driver_name_uses_actual_chip_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rtc = root / "rtc0"
+            device = rtc / "device"
+            node = device / "of_node"
+            node.mkdir(parents=True)
+            (rtc / "name").write_text("rtc-ds1307 1-0068")
+            (device / "name").write_text("ds3231")
+            compatible = node / "compatible"
+            compatible.write_bytes(b"maxim,ds3231\x00")
+            with patch("setup_rtc.RTC_ROOT", root):
+                self.assertEqual(ds3231_device(), Path("/dev/rtc0"))
+                compatible.unlink()
+                self.assertEqual(ds3231_device(), Path("/dev/rtc0"))
+                (device / "name").write_text("ds1307")
+                with self.assertRaisesRegex(RuntimeError, "No DS3231"):
+                    ds3231_device()
+
     def test_unsynchronised_clock_is_never_copied_implicitly(self):
         with patch("setup_rtc.ds3231_device", return_value=Path("/dev/rtc0")), \
                 patch("setup_rtc.run", return_value=SimpleNamespace(stdout="no\n")) as command, \

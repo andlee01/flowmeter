@@ -92,7 +92,16 @@ def ensure_hwclock():
 
 def ds3231_device():
     for rtc in sorted(RTC_ROOT.glob("rtc[0-9]*")):
-        if "ds3231" in (rtc / "name").read_text().lower():
+        # rtc/name may identify the shared rtc-ds1307 driver rather than the chip.
+        compatible = rtc / "device/of_node/compatible"
+        chip_name = rtc / "device/name"
+        if compatible.exists():
+            is_ds3231 = b"maxim,ds3231" in compatible.read_bytes().split(b"\x00")
+        elif chip_name.exists():
+            is_ds3231 = chip_name.read_text().strip().lower() == "ds3231"
+        else:
+            is_ds3231 = (rtc / "name").read_text().lower().split()[0] == "ds3231"
+        if is_ds3231:
             if rtc.name != "rtc0":
                 raise RuntimeError("DS3231 is not rtc0; this script expects it to be the "
                                    "primary RTC on a Pi 2/3. Review other RTC devices first.")
