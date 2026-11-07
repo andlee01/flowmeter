@@ -155,33 +155,81 @@ must be checked on the actual OS image.
 
 ### Start automatically at boot, with the recording LED
 
-The included service template runs the logger as your normal user, with serial
-and LED group access. From the cloned project directory, install the LED rule
-above, stop any manually running logger, and create the service:
+Use `setup_service.py` to install a systemd service. Run it from your normal
+account using sudo, so it can detect which user should run the logger. Install
+`.venv` and the Python dependencies first, and stop any manually running logger.
+The installer itself uses only system Python's standard library.
 
 ```bash
 cd ~/flowmeter
-sed "s|@USER@|$(id -un)|g; s|@PROJECT@|$PWD|g" flowmeter.service.in | sudo tee /etc/systemd/system/flowmeter.service > /dev/null
-sudo systemctl daemon-reload
-sudo systemctl enable --now flowmeter.service
-systemctl status flowmeter.service
+python3 setup_service.py --dry-run --interval 10s
+sudo python3 setup_service.py --interval 10s
 ```
 
-This replaces an existing `flowmeter.service` file with the supplied template.
-If it was already running, apply changes with `sudo systemctl restart flowmeter`.
-The template samples every 10 seconds; edit `ExecStart` to change the interval.
-Do not run a manual instance alongside the service. To view logs or stop it:
+This installs the service and LED permissions, enables automatic startup at boot,
+and starts/restarts it immediately. The logger runs as your normal user with
+`dialout` and `gpio` supplementary groups; the logger process does not run as root.
+No logout is needed for the service's explicit group access. Normal manual runs
+still need the user group membership described above. The installer refuses to
+start a duplicate if a manual logger from this project is already running.
+
+If you have configured the DS3231, add `--require-rtc`:
 
 ```bash
+sudo python3 setup_service.py --interval 10s --require-rtc
+```
+
+This adds a device dependency and the matching udev rule so startup waits for
+`rtc0`. If the RTC is missing, logging will not start until it becomes available.
+No network-online dependency is added, so logging can work offline using the RTC.
+Verify the RTC was initialised correctly before relying on offline timestamps.
+
+Other examples:
+
+```bash
+# Sample every five minutes.
+sudo python3 setup_service.py --interval 5m --require-rtc
+
+# Enable at next boot without starting/restarting a running service now.
+sudo python3 setup_service.py --interval 10s --require-rtc --no-start
+
+# Different meter settings, without onboard LED control.
+sudo python3 setup_service.py --slave-id 2 --baud 19200 --led off
+```
+
+The installer also accepts `--port`, `--serial-number`, `--parity`, `--stopbits`,
+`--word-order`, `--output-dir`, and `--user`; use `--help` for details. When invoked
+from a root shell directly, specify `--user YOUR_NORMAL_USERNAME`. Rerunning it
+replaces the service settings with the supplied options/defaults, backing up
+changed files first. Always repeat options you want to retain. Service syntax
+and Python imports are checked before installing the unit. For advanced manual
+configuration, `flowmeter.service.in` remains available as a basic template.
+
+Check service status, view logs, or stop/start recording:
+
+```bash
+systemctl status flowmeter.service
 journalctl -u flowmeter.service -n 20 --no-pager
 sudo systemctl stop flowmeter
+sudo systemctl start flowmeter
+```
+
+The service can be active while the meter is disconnected and error rows are
+being recorded; inspect the logs/CSV or recording LED to confirm successful reads.
+Ctrl+C in a terminal does not stop this background service. To disable automatic
+startup and stop recording:
+
+```bash
+sudo systemctl disable --now flowmeter
 ```
 
 No desktop or login is required for this system service. If using Raspberry Pi
 Connect without automatic login, run `loginctl enable-linger` before rebooting
 to keep Connect's remote shell available. To boot without the desktop, use
 `sudo raspi-config` and select console boot under the boot/login settings.
-A new timestamped CSV is created on each service start.
+A new timestamped CSV is created on each service start in the project's
+`readings/` directory unless `--output-dir` was specified. After `git pull`,
+restart a running service with `sudo systemctl restart flowmeter` to use new code.
 
 ### DS3231 battery-backed clock for offline logging
 

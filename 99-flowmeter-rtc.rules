@@ -1,0 +1,2 @@
+# Expose rtc0 as a systemd device so the logger can wait for the hardware clock.
+ACTION=="add", SUBSYSTEM=="rtc", KERNEL=="rtc0", TAG+="systemd"
