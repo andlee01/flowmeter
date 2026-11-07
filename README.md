@@ -173,25 +173,37 @@ No logout is needed for the service's explicit group access. Normal manual runs
 still need the user group membership described above. The installer refuses to
 start a duplicate if a manual logger from this project is already running.
 
-If you have configured the DS3231, add `--require-rtc`:
+If you have configured the DS3231, add `--wait-for-rtc` (`--require-rtc` remains an alias):
 
 ```bash
-sudo python3 setup_service.py --interval 10s --require-rtc
+sudo python3 setup_service.py --interval 10s --wait-for-rtc
 ```
 
-This adds a device dependency and the matching udev rule so startup waits for
-`rtc0`. If the RTC is missing, logging will not start until it becomes available.
+This runs a short startup check for `/dev/rtc0`. The logger starts immediately
+if the RTC is present. Otherwise it waits only until **120 seconds after the Pi
+booted**, then logs a warning and starts recording anyway using current system
+time. A restart more than two minutes after boot does not wait again. The wait
+uses boot uptime, so RTC/NTP wall-clock corrections do not change the deadline.
+
+There is no mandatory RTC device dependency: an absent RTC or failed startup
+check must not block the logger. The helper's exit status is ignored by systemd
+as an additional fallback. The old `--require-rtc` option now has exactly these
+same bounded-wait semantics; it no longer makes an RTC a hard requirement.
 No network-online dependency is added, so logging can work offline using the RTC.
-Verify the RTC was initialised correctly before relying on offline timestamps.
+If neither RTC nor internet time is available, timestamps may be inaccurate;
+the warning appears in `journalctl -u flowmeter`. Verify RTC initialisation before
+relying on offline timestamps. Re-run this installer after updating to replace
+an existing service's old mandatory RTC dependency; `git pull` alone does not
+change an installed systemd unit.
 
 Other examples:
 
 ```bash
 # Sample every five minutes.
-sudo python3 setup_service.py --interval 5m --require-rtc
+sudo python3 setup_service.py --interval 5m --wait-for-rtc
 
 # Enable at next boot without starting/restarting a running service now.
-sudo python3 setup_service.py --interval 10s --require-rtc --no-start
+sudo python3 setup_service.py --interval 10s --wait-for-rtc --no-start
 
 # Different meter settings, without onboard LED control.
 sudo python3 setup_service.py --slave-id 2 --baud 19200 --led off

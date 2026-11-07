@@ -17,7 +17,6 @@ import tempfile
 PROJECT = Path(__file__).resolve().parent
 UNIT = Path("/etc/systemd/system/flowmeter.service")
 RULE = Path("/etc/udev/rules.d/99-flowmeter-led.rules")
-RTC_RULE = Path("/etc/udev/rules.d/99-flowmeter-rtc.rules")
 
 
 def interval(value):
@@ -49,13 +48,17 @@ def render_service(args, user, project):
     if args.output_dir:
         command += ["--output-dir", str(args.output_dir.resolve())]
     groups = "dialout" + (" gpio" if args.led != "off" else "")
-    rtc = "Requires=dev-rtc0.device\nAfter=dev-rtc0.device\n" if args.require_rtc else ""
+    rtc = ""
+    if args.require_rtc:
+        check = [str(project / ".venv/bin/python"), "-u", str(project / "wait_for_rtc.py")]
+        # '-' means a failed check must never prevent the logger from starting.
+        rtc = "ExecStartPre=-:" + " ".join(quote(arg) for arg in check) + "\nTimeoutStartSec=130\n"
     return ("[Unit]\nDescription=Flow meter CSV logger\n"
-            "After=local-fs.target systemd-udev-trigger.service time-set.target\n" + rtc +
+            "After=local-fs.target systemd-udev-trigger.service time-set.target\n" +
             "\n[Service]\nType=simple\n" +
             f"User={user}\nSupplementaryGroups={groups}\n" +
             f"WorkingDirectory={str(project).replace(chr(37), chr(37) * 2)}\n" +
-            "ExecStart=:" + " ".join(quote(arg) for arg in command) + "\n" +
+            rtc + "ExecStart=:" + " ".join(quote(arg) for arg in command) + "\n" +
             "Restart=always\nRestartSec=10\nTimeoutStopSec=30\n" +
             "\n[Install]\nWantedBy=multi-user.target\n")
 
@@ -120,7 +123,8 @@ def parser():
     result.add_argument("--word-order", choices=["little", "big"], default="little")
     result.add_argument("--led", choices=["auto", "off", "ACT", "led0"], default="auto")
     result.add_argument("--output-dir", type=Path, help="CSV directory; default is project/readings")
-    result.add_argument("--require-rtc", action="store_true", help="wait for rtc0 before starting; use after RTC setup")
+    result.add_argument("--wait-for-rtc", "--require-rtc", dest="require_rtc", action="store_true",
+                        help="wait for rtc0 until 2 minutes after boot, then start anyway; --require-rtc is a compatibility alias")
     result.add_argument("--no-start", action="store_true", help="enable for boot without starting/restarting now")
     result.add_argument("--dry-run", action="store_true", help="show service configuration without installing or starting anything")
     return result
@@ -172,14 +176,10 @@ def main():
     install_text(UNIT, content)
     if args.led != "off":
         install_text(RULE, (PROJECT / "99-flowmeter-led.rules").read_text())
-    if args.require_rtc:
-        install_text(RTC_RULE, (PROJECT / "99-flowmeter-rtc.rules").read_text())
-    if args.led != "off" or args.require_rtc:
+    if args.led != "off":
         subprocess.run(["udevadm", "control", "--reload-rules"], check=True)
     if args.led != "off":
         subprocess.run(["udevadm", "trigger", "--subsystem-match=leds", "--action=add"], check=True)
-    if args.require_rtc:
-        subprocess.run(["udevadm", "trigger", "--subsystem-match=rtc", "--action=add"], check=True)
     subprocess.run(["systemctl", "daemon-reload"], check=True)
     subprocess.run(["systemctl", "enable", "flowmeter.service"], check=True)
     if not args.no_start:

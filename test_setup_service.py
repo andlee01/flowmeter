@@ -26,7 +26,11 @@ class ServiceSetupTest(unittest.TestCase):
         self.assertIn('"--interval" "5m"', unit)
         self.assertIn('"--serial-number" "ABC123"', unit)
         self.assertIn("SupplementaryGroups=dialout gpio", unit)
-        self.assertIn("Requires=dev-rtc0.device", unit)
+        self.assertIn('ExecStartPre=-:"/home/pi/flowmeter/.venv/bin/python"', unit)
+        self.assertIn('"/home/pi/flowmeter/wait_for_rtc.py"', unit)
+        self.assertIn("TimeoutStartSec=130", unit)
+        self.assertNotIn("Requires=dev-rtc0.device", unit)
+        self.assertNotIn("After=dev-rtc0.device", unit)
         self.assertIn("WantedBy=multi-user.target", unit)
         self.assertNotIn("network-online.target", unit)
 
@@ -34,6 +38,13 @@ class ServiceSetupTest(unittest.TestCase):
         unit = render_service(parser().parse_args(["--led", "off"]), "pi", Path("/home/pi/flowmeter"))
         self.assertIn("SupplementaryGroups=dialout\n", unit)
         self.assertNotIn("Requires=dev-rtc0.device", unit)
+        self.assertNotIn("ExecStartPre=", unit)
+
+    def test_new_wait_flag_and_legacy_flag_generate_same_service(self):
+        project = Path("/home/pi/flowmeter")
+        legacy = render_service(parser().parse_args(["--require-rtc"]), "pi", project)
+        current = render_service(parser().parse_args(["--wait-for-rtc"]), "pi", project)
+        self.assertEqual(legacy, current)
 
     def test_paths_are_quoted_and_specifiers_are_escaped(self):
         unit = render_service(parser().parse_args([]), "pi", Path('/home/pi/a space % $test'))
@@ -74,8 +85,8 @@ class ServiceSetupTest(unittest.TestCase):
                     commands = [call.args[0] for call in command.call_args_list]
                     self.assertIn(["systemctl", "enable", "flowmeter.service"], commands)
                     self.assertEqual(["systemctl", "restart", "flowmeter.service"] in commands, not no_start)
-                    self.assertIn(["udevadm", "trigger", "--subsystem-match=rtc", "--action=add"], commands)
-                    self.assertEqual(install.call_count, 3)
+                    self.assertNotIn(["udevadm", "trigger", "--subsystem-match=rtc", "--action=add"], commands)
+                    self.assertEqual(install.call_count, 2)
 
     def test_dry_run_has_no_system_side_effects(self):
         with patch("sys.argv", ["setup_service.py", "--dry-run", "--user", "test-user"]), \
